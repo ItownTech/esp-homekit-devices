@@ -758,8 +758,8 @@
     .unit = homekit_unit_celsius, \
     .permissions = homekit_permissions_paired_read \
                  | homekit_permissions_notify, \
-    .min_value = (float[]) {0}, \
-    .max_value = (float[]) {100}, \
+    .min_value = (float[]) {-100}, \
+    .max_value = (float[]) {200}, \
     .min_step = (float[]) {0.1}, \
     .value = HOMEKIT_FLOAT_(_value), \
     ##__VA_ARGS__
@@ -1663,7 +1663,8 @@
     .type = HOMEKIT_CHARACTERISTIC_SELECTED_RTP_STREAM_CONFIGURATION, \
     .description = "Selected RTP Stream Configuration", \
     .format = homekit_format_tlv, \
-    .permissions = homekit_permissions_paired_write, \
+    .permissions = homekit_permissions_paired_read \
+                 | homekit_permissions_paired_write, \
     ##__VA_ARGS__
 
 #define HOMEKIT_CHARACTERISTIC_VOLUME HOMEKIT_APPLE_UUID3("119")
@@ -2163,7 +2164,7 @@
     .permissions = homekit_permissions_paired_read \
                  | homekit_permissions_notify, \
     .min_value = (float[]) {0}, \
-    .max_value = (float[]) {3600}, \
+    .max_value = (float[]) {14400}, \
     .min_step = (float[]) {1}, \
     .value = HOMEKIT_UINT32_(_value), \
     ##__VA_ARGS__
@@ -2177,7 +2178,7 @@
                  | homekit_permissions_paired_write \
                  | homekit_permissions_notify, \
     .min_value = (float[]) {0}, \
-    .max_value = (float[]) {3600}, \
+    .max_value = (float[]) {14400}, \
     .min_step = (float[]) {1}, \
     .value = HOMEKIT_UINT32_(_value), \
     ##__VA_ARGS__

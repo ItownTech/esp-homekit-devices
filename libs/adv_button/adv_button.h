@@ -17,7 +17,7 @@
  */
 
 /*
- * Based on Button library by Maxin Kulkin (@MaximKulkin), licensed under the MIT License.
+ * Based on Button library by Maxim Kulkin (@MaximKulkin), licensed under the MIT License.
  * https://github.com/maximkulkin/esp-homekit-demo/blob/master/examples/button/button.c
  */
 
@@ -26,9 +26,12 @@
 
 typedef void (*button_callback_fn)(uint8_t gpio);
 
-int adv_button_create(uint8_t gpio);
+int adv_button_create(uint8_t gpio, bool pullup_resistor);
 void adv_button_destroy(uint8_t gpio);
-void adv_button_timing_reset();
+void adv_button_set_disable_time();
+
+int adv_toggle_create(uint8_t gpio, bool pullup_resistor);
+void adv_toggle_destroy(uint8_t gpio);
 
 /*
  * Button callback types:
@@ -39,5 +42,13 @@ void adv_button_timing_reset();
  * 5 Hold press
  */
 int adv_button_register_callback_fn(uint8_t gpio, button_callback_fn callback, uint8_t button_callback_type);
+
+/*
+ * Toggle callback types:
+ * 0 Low
+ * 1 High
+ * 2 Both
+ */
+int adv_toggle_register_callback_fn(uint8_t gpio, button_callback_fn callback, uint8_t toggle_callback_type);
 
 #endif // __ADVANCED_BUTTON__
