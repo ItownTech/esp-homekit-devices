@@ -1,7 +1,7 @@
 /*
  * HomeKit Custom Characteristics
  * 
- * Copyright 2018 José A. Jiménez (@RavenSystem)
+ * Copyright 2018-2019 José A. Jiménez (@RavenSystem)
  *  
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -86,17 +86,20 @@
     ##__VA_ARGS__
 
 /* Device Types
- 1. Switch 1ch
- 2. Switch 2ch
- 3. Socket + Button
- 4. Switch 4ch
- 5. Thermostat
- 6. Switch Basic + TH Sensor
- 7. Water Valve
- 8. Garage Door
- 9. Socket + Button + TH Sensor
+  1. Switch 1ch
+  2. Switch 2ch
+  3. Socket + Button
+  4. Switch 4ch
+  5. Thermostat
+  6. Switch Basic + TH Sensor
+  7. Water Valve
+  8. Garage Door
+  9. Socket + Button + TH Sensor
  10. ESP01 Switch + Button
  11. Switch 3ch
+ 12. Window
+ 13. Lock
+ 14. MagicHome
  */
 #define HOMEKIT_CHARACTERISTIC_CUSTOM_DEVICE_TYPE HOMEKIT_CUSTOM_UUID("F0000100")
 #define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_DEVICE_TYPE(_value, ...) \
@@ -107,11 +110,11 @@
     | homekit_permissions_paired_write \
     | homekit_permissions_notify, \
     .min_value = (float[]) {1}, \
-    .max_value = (float[]) {11}, \
+    .max_value = (float[]) {14}, \
     .min_step = (float[]) {1}, \
     .valid_values = { \
-    .count = 11, \
-    .values = (uint8_t[]) {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}, \
+    .count = 14, \
+    .values = (uint8_t[]) {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, \
     }, \
     .value = HOMEKIT_UINT8_(_value), \
     ##__VA_ARGS__
@@ -233,7 +236,7 @@
 #define HOMEKIT_CHARACTERISTIC_CUSTOM_GARAGEDOOR_HAS_STOP HOMEKIT_CUSTOM_UUID("F0000110")
 #define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_GARAGEDOOR_HAS_STOP(_value, ...) \
     .type = HOMEKIT_CHARACTERISTIC_CUSTOM_GARAGEDOOR_HAS_STOP, \
-    .description = "Has stop step", \
+    .description = "Has Stop", \
     .format = homekit_format_bool, \
     .permissions = homekit_permissions_paired_read \
     | homekit_permissions_paired_write \
@@ -245,18 +248,11 @@
 #define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_GARAGEDOOR_SENSOR_CLOSE_NC(_value, ...) \
     .type = HOMEKIT_CHARACTERISTIC_CUSTOM_GARAGEDOOR_SENSOR_CLOSE_NC, \
     .description = "Sensor Close NC", \
-    .format = homekit_format_uint8, \
+    .format = homekit_format_bool, \
     .permissions = homekit_permissions_paired_read \
     | homekit_permissions_paired_write \
     | homekit_permissions_notify, \
-    .min_value = (float[]) {0}, \
-    .max_value = (float[]) {2}, \
-    .min_step = (float[]) {1}, \
-    .valid_values = { \
-    .count = 3, \
-    .values = (uint8_t[]) {0, 1, 2}, \
-    }, \
-    .value = HOMEKIT_UINT8_(_value), \
+    .value = HOMEKIT_BOOL_(_value), \
     ##__VA_ARGS__
 
 #define HOMEKIT_CHARACTERISTIC_CUSTOM_GARAGEDOOR_SENSOR_OPEN HOMEKIT_CUSTOM_UUID("F0000112")
@@ -277,18 +273,18 @@
     .value = HOMEKIT_UINT8_(_value), \
     ##__VA_ARGS__
 
-#define HOMEKIT_CHARACTERISTIC_CUSTOM_GARAGEDOOR_BUTTON_TIME HOMEKIT_CUSTOM_UUID("F0000113")
-#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_GARAGEDOOR_BUTTON_TIME(_value, ...) \
-    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_GARAGEDOOR_BUTTON_TIME, \
-    .description = "Button time", \
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME HOMEKIT_CUSTOM_UUID("F0000113")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_INCHING_TIME(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME, \
+    .description = "Inching time", \
     .format = homekit_format_float, \
     .unit = homekit_unit_seconds, \
     .permissions = homekit_permissions_paired_read \
     | homekit_permissions_paired_write \
     | homekit_permissions_notify, \
-    .min_value = (float[]) {0.1}, \
-    .max_value = (float[]) {2.5}, \
-    .min_step = (float[]) {0.1}, \
+    .min_value = (float[]) {0}, \
+    .max_value = (float[]) {5.1}, \
+    .min_step = (float[]) {0.3}, \
     .value = HOMEKIT_FLOAT_(_value), \
     ##__VA_ARGS__
 
@@ -336,7 +332,7 @@
     .value = HOMEKIT_UINT8_(_value), \
     ##__VA_ARGS__
 
-#define HOMEKIT_CHARACTERISTIC_CUSTOM_HUMIDITY_OFFSET HOMEKIT_APPLE_UUID2("F0000117")
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_HUMIDITY_OFFSET HOMEKIT_CUSTOM_UUID("F0000117")
 #define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_HUMIDITY_OFFSET(_value, ...) \
     .type = HOMEKIT_CHARACTERISTIC_CUSTOM_HUMIDITY_OFFSET, \
     .description = "Offset HUM", \
@@ -351,7 +347,7 @@
     .value = HOMEKIT_FLOAT_(_value), \
     ##__VA_ARGS__
 
-#define HOMEKIT_CHARACTERISTIC_CUSTOM_TEMPERATURE_OFFSET HOMEKIT_APPLE_UUID2("F0000118")
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_TEMPERATURE_OFFSET HOMEKIT_CUSTOM_UUID("F0000118")
 #define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_TEMPERATURE_OFFSET(_value, ...) \
     .type = HOMEKIT_CHARACTERISTIC_CUSTOM_TEMPERATURE_OFFSET, \
     .description = "Offset TEMP", \
@@ -408,6 +404,143 @@
     | homekit_permissions_paired_write \
     | homekit_permissions_notify, \
     .value = HOMEKIT_BOOL_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_COVERING_UP_TIME HOMEKIT_CUSTOM_UUID("F0000123")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_COVERING_UP_TIME(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_COVERING_UP_TIME, \
+    .description = "Time Open", \
+    .format = homekit_format_float, \
+    .unit = homekit_unit_seconds, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {3}, \
+    .max_value = (float[]) {60}, \
+    .min_step = (float[]) {0.2}, \
+    .value = HOMEKIT_FLOAT_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_COVERING_DOWN_TIME HOMEKIT_CUSTOM_UUID("F0000124")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_COVERING_DOWN_TIME(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_COVERING_DOWN_TIME, \
+    .description = "Time Close", \
+    .format = homekit_format_float, \
+    .unit = homekit_unit_seconds, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {3}, \
+    .max_value = (float[]) {60}, \
+    .min_step = (float[]) {0.2}, \
+    .value = HOMEKIT_FLOAT_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_COVERING_TYPE HOMEKIT_CUSTOM_UUID("F0000125")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_COVERING_TYPE(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_COVERING_TYPE, \
+    .description = "Cover Type", \
+    .format = homekit_format_uint8, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {0}, \
+    .max_value = (float[]) {2}, \
+    .min_step = (float[]) {1}, \
+    .valid_values = { \
+    .count = 3, \
+    .values = (uint8_t[]) {0, 1, 2}, \
+    }, \
+    .value = HOMEKIT_UINT8_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_TEMPERATURE_DEADBAND HOMEKIT_CUSTOM_UUID("F0000126")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_TEMPERATURE_DEADBAND(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_TEMPERATURE_DEADBAND, \
+    .description = "TEMP Deadband", \
+    .format = homekit_format_float, \
+    .unit = homekit_unit_celsius, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {0}, \
+    .max_value = (float[]) {3}, \
+    .min_step = (float[]) {0.1}, \
+    .value = HOMEKIT_FLOAT_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_R_GPIO HOMEKIT_CUSTOM_UUID("F0000127")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_R_GPIO(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_R_GPIO, \
+    .description = "Pin R", \
+    .format = homekit_format_uint8, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {5}, \
+    .max_value = (float[]) {16}, \
+    .min_step = (float[]) {1}, \
+    .value = HOMEKIT_UINT8_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_G_GPIO HOMEKIT_CUSTOM_UUID("F0000128")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_G_GPIO(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_G_GPIO, \
+    .description = "Pin G", \
+    .format = homekit_format_uint8, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {5}, \
+    .max_value = (float[]) {16}, \
+    .min_step = (float[]) {1}, \
+    .value = HOMEKIT_UINT8_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_B_GPIO HOMEKIT_CUSTOM_UUID("F0000129")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_B_GPIO(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_B_GPIO, \
+    .description = "Pin B", \
+    .format = homekit_format_uint8, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {5}, \
+    .max_value = (float[]) {16}, \
+    .min_step = (float[]) {1}, \
+    .value = HOMEKIT_UINT8_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_W_GPIO HOMEKIT_CUSTOM_UUID("F0000130")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_W_GPIO(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_W_GPIO, \
+    .description = "Pin W", \
+    .format = homekit_format_uint8, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {0}, \
+    .max_value = (float[]) {16}, \
+    .min_step = (float[]) {1}, \
+    .value = HOMEKIT_UINT8_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_COLOR_BOOST HOMEKIT_CUSTOM_UUID("F0000131")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_COLOR_BOOST(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_COLOR_BOOST, \
+    .description = "Color Boost", \
+    .format = homekit_format_uint8, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {1}, \
+    .max_value = (float[]) {3}, \
+    .min_step = (float[]) {1}, \
+    .valid_values = { \
+    .count = 3, \
+    .values = (uint8_t[]) {1, 2, 3}, \
+    }, \
+    .value = HOMEKIT_UINT8_(_value), \
     ##__VA_ARGS__
 
 /* Switch Initial State

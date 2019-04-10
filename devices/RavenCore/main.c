@@ -1,9 +1,9 @@
 /*
  * RavenCore
  * 
- * v0.6.1
+ * v0.8.1
  * 
- * Copyright 2018 José A. Jiménez (@RavenSystem)
+ * Copyright 2018-2019 José A. Jiménez (@RavenSystem)
  *  
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,6 +30,9 @@
   9. Socket + Button + TH Sensor
  10. ESP01 Switch + Button
  11. Switch 3ch
+ 12. Window
+ 13. Lock
+ 14. MagicHome
  */
 
 //#include <stdio.h>
@@ -42,6 +45,7 @@
 #include <rboot-api.h>
 #include <sysparam.h>
 //#include <task.h>
+#include <math.h>
 
 //#include <etstimer.h>
 #include <esplibs/libmain.h>
@@ -52,10 +56,22 @@
 #include <led_codes.h>
 #include <adv_button.h>
 
+#include <multipwm/multipwm.h>
+
 #include <dht/dht.h>
 #include <ds18b20/ds18b20.h>
 
 #include "../common/custom_characteristics.h"
+
+// Version
+#define RAVENCORE_VERSION               "0.8.1"
+#define CONFIG_NUMBER                   001001      // Matches as example: firmware_revision 2.3.8 = 02.03.10 (octal) = config_number 020310
+
+// RGBW
+#define INITIAL_R_GPIO                  5
+#define INITIAL_G_GPIO                  12
+#define INITIAL_B_GPIO                  13
+#define INITIAL_W_GPIO                  0
 
 // Shelly
 #define S1_TOGGLE_GPIO                  5
@@ -73,6 +89,8 @@
 #define DOOR_OBSTRUCTION_GPIO           5
 //#define DOOR_CLOSED_GPIO              extra_gpio = 14
 
+#define COVERING_POLL_PERIOD_MS         250
+
 //#define TOGGLE_GPIO                   extra_gpio = 14
 
 //#define BUTTON1_GPIO                  button1_gpio = 0
@@ -87,6 +105,8 @@
 
 #define DISABLED_TIME                   60
 #define ALLOWED_FACTORY_RESET_TIME      120000
+
+#define PWM_RGBW_SCALE                  65535
 
 // SysParam
 #define OTA_REPO_SYSPARAM                               "ota_repo"
@@ -106,7 +126,7 @@
 #define GARAGEDOOR_SENSOR_OPEN_SYSPARAM                 "m"
 #define GARAGEDOOR_SENSOR_OBSTRUCTION_SYSPARAM          "n"
 #define GARAGEDOOR_CONTROL_WITH_BUTTON_SYSPARAM         "o"
-#define GARAGEDOOR_BUTTON_TIME_SYSPARAM                 "p"
+#define INCHING_TIME_SYSPARAM                           "p"
 #define TARGET_TEMPERATURE_SYSPARAM                     "q"
 #define INIT_STATE_SW1_SYSPARAM                         "r"
 #define INIT_STATE_SW2_SYSPARAM                         "s"
@@ -125,12 +145,27 @@
 #define REVERSE_SW2_SYSPARAM                            "5"
 #define REVERSE_SW3_SYSPARAM                            "6"
 #define REVERSE_SW4_SYSPARAM                            "7"
+#define COVERING_UP_TIME_SYSPARAM                       "8"
+#define COVERING_DOWN_TIME_SYSPARAM                     "9"
+#define COVERING_TYPE_SYSPARAM                          "!"
+#define COVERING_LAST_POSITION_SYSPARAM                 "A"
+#define TEMP_DEADBAND_SYSPARAM                          "B"
+#define R_GPIO_SYSPARAM                                 "C"
+#define G_GPIO_SYSPARAM                                 "D"
+#define B_GPIO_SYSPARAM                                 "E"
+#define W_GPIO_SYSPARAM                                 "F"
+#define LAST_STATE_BRIGHTNESS_SYSPARAM                  "G"
+#define LAST_STATE_HUE_SYSPARAM                         "H"
+#define LAST_STATE_SATURATION_SYSPARAM                  "I"
+#define COLOR_BOOST_SYSPARAM                            "J"
 
-bool gd_is_moving = false;
+bool is_moving = false;
 uint8_t device_type_static = 1, reset_toggle_counter = 0, gd_time_state = 0, button1_gpio = 0, button2_gpio = 9, relay1_gpio = 12, extra_gpio = 14;
+uint8_t r_gpio, g_gpio, b_gpio, w_gpio;
 volatile uint32_t last_press_time;
-volatile float old_humidity_value = 0.0, old_temperature_value = 0.0;
+volatile float old_humidity_value = 0.0, old_temperature_value = 0.0, covering_actual_pos = 0.0, covering_step_time_up = 0.2, covering_step_time_down = 0.2;
 ETSTimer device_restart_timer, factory_default_toggle_timer, change_settings_timer, save_states_timer, extra_func_timer;
+pwm_info_t pwm_info;
 
 void switch1_on_callback(homekit_value_t value);
 homekit_value_t read_switch1_on_callback();
@@ -141,9 +176,9 @@ homekit_value_t read_switch3_on_callback();
 void switch4_on_callback(homekit_value_t value);
 homekit_value_t read_switch4_on_callback();
 
-void on_target(homekit_value_t value);
-homekit_value_t read_on_target();
-void update_state();
+void th_target(homekit_value_t value);
+homekit_value_t read_th_target();
+void update_th_state();
 
 void valve_on_callback(homekit_value_t value);
 homekit_value_t read_valve_on_callback();
@@ -152,6 +187,20 @@ homekit_value_t read_remaining_duration_on_callback();
 
 void garage_on_callback(homekit_value_t value);
 homekit_value_t read_garage_on_callback();
+
+void covering_on_callback(homekit_value_t value);
+homekit_value_t read_covering_on_callback();
+
+void lock_on_callback(homekit_value_t value);
+homekit_value_t read_lock_on_callback();
+
+void rgbw_set();
+void brightness_callback(homekit_value_t value);
+homekit_value_t read_brightness_callback();
+void hue_callback(homekit_value_t value);
+homekit_value_t read_hue_callback();
+void saturation_callback(homekit_value_t value);
+homekit_value_t read_saturation_callback();
 
 void show_setup_callback();
 void ota_firmware_callback();
@@ -176,10 +225,10 @@ homekit_characteristic_t button_event = HOMEKIT_CHARACTERISTIC_(PROGRAMMABLE_SWI
 
 // Thermostat
 homekit_characteristic_t current_temperature = HOMEKIT_CHARACTERISTIC_(CURRENT_TEMPERATURE, 0);
-homekit_characteristic_t target_temperature  = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE, 23, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(update_state));
+homekit_characteristic_t target_temperature  = HOMEKIT_CHARACTERISTIC_(TARGET_TEMPERATURE, 23, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(update_th_state));
 homekit_characteristic_t units = HOMEKIT_CHARACTERISTIC_(TEMPERATURE_DISPLAY_UNITS, 0);
 homekit_characteristic_t current_state = HOMEKIT_CHARACTERISTIC_(CURRENT_HEATING_COOLING_STATE, 0);
-homekit_characteristic_t target_state = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE, 0, .getter=read_on_target, .setter=on_target);
+homekit_characteristic_t target_state = HOMEKIT_CHARACTERISTIC_(TARGET_HEATING_COOLING_STATE, 0, .getter=read_th_target, .setter=th_target);
 homekit_characteristic_t current_humidity = HOMEKIT_CHARACTERISTIC_(CURRENT_RELATIVE_HUMIDITY, 0);
 
 // Water Valve
@@ -194,6 +243,20 @@ homekit_characteristic_t current_door_state = HOMEKIT_CHARACTERISTIC_(CURRENT_DO
 homekit_characteristic_t target_door_state = HOMEKIT_CHARACTERISTIC_(TARGET_DOOR_STATE, 1, .getter=read_garage_on_callback, .setter=garage_on_callback);
 homekit_characteristic_t obstruction_detected = HOMEKIT_CHARACTERISTIC_(OBSTRUCTION_DETECTED, false);
 
+// Window Covering
+homekit_characteristic_t covering_current_position = HOMEKIT_CHARACTERISTIC_(CURRENT_POSITION, 0);
+homekit_characteristic_t covering_target_position = HOMEKIT_CHARACTERISTIC_(TARGET_POSITION, 0, .getter=read_covering_on_callback, .setter=covering_on_callback);
+homekit_characteristic_t covering_position_state = HOMEKIT_CHARACTERISTIC_(POSITION_STATE, 2);
+
+// Lock Mechanism
+homekit_characteristic_t lock_current_state = HOMEKIT_CHARACTERISTIC_(LOCK_CURRENT_STATE, 1);
+homekit_characteristic_t lock_target_state = HOMEKIT_CHARACTERISTIC_(LOCK_TARGET_STATE, 1, .getter=read_lock_on_callback, .setter=lock_on_callback);
+
+// RGBW
+homekit_characteristic_t brightness = HOMEKIT_CHARACTERISTIC_(BRIGHTNESS, 100, .getter=read_brightness_callback, .setter=brightness_callback);
+homekit_characteristic_t hue = HOMEKIT_CHARACTERISTIC_(HUE, 0, .getter=read_hue_callback, .setter=hue_callback);
+homekit_characteristic_t saturation = HOMEKIT_CHARACTERISTIC_(SATURATION, 0, .getter=read_saturation_callback, .setter=saturation_callback);
+
 // ---------- SETUP ----------
 // General Setup
 homekit_characteristic_t show_setup = HOMEKIT_CHARACTERISTIC_(CUSTOM_SHOW_SETUP, true, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(show_setup_callback));
@@ -206,6 +269,8 @@ homekit_characteristic_t log_output = HOMEKIT_CHARACTERISTIC_(CUSTOM_LOG_OUTPUT,
 homekit_characteristic_t ip_addr = HOMEKIT_CHARACTERISTIC_(CUSTOM_IP_ADDR, "", .id=130, .getter=read_ip_addr);
 homekit_characteristic_t wifi_reset = HOMEKIT_CHARACTERISTIC_(CUSTOM_WIFI_RESET, false, .id=131, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 
+homekit_characteristic_t custom_inching_time = HOMEKIT_CHARACTERISTIC_(CUSTOM_INCHING_TIME, 0, .id=117, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
+
 // Switch Setup
 homekit_characteristic_t external_toggle1 = HOMEKIT_CHARACTERISTIC_(CUSTOM_EXTERNAL_TOGGLE1, 0, .id=111, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 homekit_characteristic_t external_toggle2 = HOMEKIT_CHARACTERISTIC_(CUSTOM_EXTERNAL_TOGGLE2, 0, .id=128, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
@@ -215,18 +280,30 @@ homekit_characteristic_t dht_sensor_type = HOMEKIT_CHARACTERISTIC_(CUSTOM_DHT_SE
 homekit_characteristic_t hum_offset = HOMEKIT_CHARACTERISTIC_(CUSTOM_HUMIDITY_OFFSET, 0, .id=132, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 homekit_characteristic_t temp_offset = HOMEKIT_CHARACTERISTIC_(CUSTOM_TEMPERATURE_OFFSET, 0.0, .id=133, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 homekit_characteristic_t poll_period = HOMEKIT_CHARACTERISTIC_(CUSTOM_TH_PERIOD, 30, .id=125, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
+homekit_characteristic_t temp_deadband = HOMEKIT_CHARACTERISTIC_(CUSTOM_TEMPERATURE_DEADBAND, 0.0, .id=142, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 
 // Water Valve Setup
 homekit_characteristic_t custom_valve_type = HOMEKIT_CHARACTERISTIC_(CUSTOM_VALVE_TYPE, 0, .id=113, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 
 // Garage Door Setup
-homekit_characteristic_t custom_garagedoor_has_stop = HOMEKIT_CHARACTERISTIC_(CUSTOM_GARAGEDOOR_HAS_STOP, false, .id=114, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
+homekit_characteristic_t custom_garagedoor_has_stop = HOMEKIT_CHARACTERISTIC_(CUSTOM_GARAGEDOOR_HAS_STOP, true, .id=114, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 homekit_characteristic_t custom_garagedoor_sensor_close_nc = HOMEKIT_CHARACTERISTIC_(CUSTOM_GARAGEDOOR_SENSOR_CLOSE_NC, false, .id=115, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 homekit_characteristic_t custom_garagedoor_sensor_open = HOMEKIT_CHARACTERISTIC_(CUSTOM_GARAGEDOOR_SENSOR_OPEN, 0, .id=116, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
-homekit_characteristic_t custom_garagedoor_button_time = HOMEKIT_CHARACTERISTIC_(CUSTOM_GARAGEDOOR_BUTTON_TIME, 0.3, .id=117, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 homekit_characteristic_t custom_garagedoor_working_time = HOMEKIT_CHARACTERISTIC_(CUSTOM_GARAGEDOOR_WORKINGTIME, 20, .id=118, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 homekit_characteristic_t custom_garagedoor_control_with_button = HOMEKIT_CHARACTERISTIC_(CUSTOM_GARAGEDOOR_CONTROL_WITH_BUTTON, false, .id=119, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 homekit_characteristic_t custom_garagedoor_sensor_obstruction = HOMEKIT_CHARACTERISTIC_(CUSTOM_GARAGEDOOR_SENSOR_OBSTRUCTION, 0, .id=127, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
+
+// Window Covering
+homekit_characteristic_t custom_covering_up_time = HOMEKIT_CHARACTERISTIC_(CUSTOM_COVERING_UP_TIME, 30, .id=139, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
+homekit_characteristic_t custom_covering_down_time = HOMEKIT_CHARACTERISTIC_(CUSTOM_COVERING_DOWN_TIME, 30, .id=140, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
+homekit_characteristic_t custom_covering_type = HOMEKIT_CHARACTERISTIC_(CUSTOM_COVERING_TYPE, 0, .id=141, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
+
+// RGBW
+homekit_characteristic_t custom_r_gpio = HOMEKIT_CHARACTERISTIC_(CUSTOM_R_GPIO, INITIAL_R_GPIO, .id=143, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
+homekit_characteristic_t custom_g_gpio = HOMEKIT_CHARACTERISTIC_(CUSTOM_G_GPIO, INITIAL_G_GPIO, .id=144, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
+homekit_characteristic_t custom_b_gpio = HOMEKIT_CHARACTERISTIC_(CUSTOM_B_GPIO, INITIAL_B_GPIO, .id=145, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
+homekit_characteristic_t custom_w_gpio = HOMEKIT_CHARACTERISTIC_(CUSTOM_W_GPIO, INITIAL_W_GPIO, .id=146, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
+homekit_characteristic_t custom_color_boost = HOMEKIT_CHARACTERISTIC_(CUSTOM_COLOR_BOOST, 1, .id=147, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 
 // Initial State Setup
 homekit_characteristic_t custom_init_state_sw1 = HOMEKIT_CHARACTERISTIC_(CUSTOM_INIT_STATE_SW1, 0, .id=120, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
@@ -241,7 +318,7 @@ homekit_characteristic_t custom_reverse_sw2 = HOMEKIT_CHARACTERISTIC_(CUSTOM_REV
 homekit_characteristic_t custom_reverse_sw3 = HOMEKIT_CHARACTERISTIC_(CUSTOM_REVERSE_SW3, false, .id=137, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 homekit_characteristic_t custom_reverse_sw4 = HOMEKIT_CHARACTERISTIC_(CUSTOM_REVERSE_SW4, false, .id=138, .callback=HOMEKIT_CHARACTERISTIC_CALLBACK(change_settings_callback));
 
-// Last used ID = 138
+// Last used ID = 147
 // ---------------------------
 
 void relay_write(bool on, const uint8_t gpio) {
@@ -258,63 +335,6 @@ void relay_write(bool on, const uint8_t gpio) {
     last_press_time = xTaskGetTickCountFromISR() + (DISABLED_TIME / portTICK_PERIOD_MS);
     adv_button_set_disable_time();
     gpio_write(gpio, on ? 1 : 0);
-}
-
-void on_target(homekit_value_t value) {
-    target_state.value = value;
-    switch (target_state.value.int_value) {
-        case 1:
-            printf("RC > HEAT\n");
-            led_code(LED_GPIO, FUNCTION_B);
-            break;
-            
-        case 2:
-            printf("RC > COOL\n");
-            led_code(LED_GPIO, FUNCTION_C);
-            break;
-            
-        default:
-            printf("RC > OFF\n");
-            led_code(LED_GPIO, FUNCTION_A);
-            break;
-    }
-
-    update_state();
-}
-
-homekit_value_t read_on_target() {
-    return target_state.value;
-}
-
-void update_state() {
-    uint8_t state = target_state.value.int_value;
-    if (state == 3) {
-        state = 0;
-        target_state.value = HOMEKIT_UINT8(0);
-        homekit_characteristic_notify(&target_state, target_state.value);
-    }
-    if (state == 1 && current_temperature.value.float_value < target_temperature.value.float_value) {
-        if (current_state.value.int_value != 1) {
-            current_state.value = HOMEKIT_UINT8(1);
-            homekit_characteristic_notify(&current_state, current_state.value);
-            
-            relay_write(true, relay1_gpio);
-        }
-    } else if (state == 2 && current_temperature.value.float_value > target_temperature.value.float_value) {
-        if (current_state.value.int_value != 2) {
-            current_state.value = HOMEKIT_UINT8(2);
-            homekit_characteristic_notify(&current_state, current_state.value);
-            
-            relay_write(true, relay1_gpio);
-        }
-    } else if (current_state.value.int_value != 0) {
-        current_state.value = HOMEKIT_UINT8(0);
-        homekit_characteristic_notify(&current_state, current_state.value);
-        
-        relay_write(false, relay1_gpio);
-    }
-    
-    save_states_callback();
 }
 
 void save_settings() {
@@ -376,6 +396,11 @@ void save_settings() {
         flash_error = status;
     }
     
+    status = sysparam_set_int32(TEMP_DEADBAND_SYSPARAM, temp_deadband.value.float_value * 100);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
     status = sysparam_set_int8(POLL_PERIOD_SYSPARAM, poll_period.value.int_value);
     if (status != SYSPARAM_OK) {
         flash_error = status;
@@ -416,7 +441,47 @@ void save_settings() {
         flash_error = status;
     }
     
-    status = sysparam_set_int32(GARAGEDOOR_BUTTON_TIME_SYSPARAM, custom_garagedoor_button_time.value.float_value * 100);
+    status = sysparam_set_int32(INCHING_TIME_SYSPARAM, custom_inching_time.value.float_value * 100);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
+    status = sysparam_set_int32(COVERING_UP_TIME_SYSPARAM, custom_covering_up_time.value.float_value * 100);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
+    status = sysparam_set_int32(COVERING_DOWN_TIME_SYSPARAM, custom_covering_down_time.value.float_value * 100);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
+    status = sysparam_set_int8(COVERING_TYPE_SYSPARAM, custom_covering_type.value.int_value);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
+    status = sysparam_set_int8(R_GPIO_SYSPARAM, custom_r_gpio.value.int_value);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
+    status = sysparam_set_int8(G_GPIO_SYSPARAM, custom_g_gpio.value.int_value);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
+    status = sysparam_set_int8(B_GPIO_SYSPARAM, custom_b_gpio.value.int_value);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
+    status = sysparam_set_int8(W_GPIO_SYSPARAM, custom_w_gpio.value.int_value);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
+    status = sysparam_set_int8(COLOR_BOOST_SYSPARAM, custom_color_boost.value.int_value);
     if (status != SYSPARAM_OK) {
         flash_error = status;
     }
@@ -521,6 +586,26 @@ void save_states() {
         flash_error = status;
     }
     
+    status = sysparam_set_int32(COVERING_LAST_POSITION_SYSPARAM, covering_actual_pos * 100);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
+    status = sysparam_set_int8(LAST_STATE_BRIGHTNESS_SYSPARAM, brightness.value.int_value);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
+    status = sysparam_set_int32(LAST_STATE_HUE_SYSPARAM, hue.value.float_value);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
+    status = sysparam_set_int8(LAST_STATE_SATURATION_SYSPARAM, saturation.value.float_value);
+    if (status != SYSPARAM_OK) {
+        flash_error = status;
+    }
+    
     if (flash_error != SYSPARAM_OK) {
         printf("RC ! Saving last states error -> %i\n", flash_error);
     }
@@ -587,18 +672,30 @@ void factory_default_task() {
     status = sysparam_set_int8(DHT_SENSOR_TYPE_SYSPARAM, 2);
     status = sysparam_set_int8(HUM_OFFSET_SYSPARAM, 0);
     status = sysparam_set_int32(TEMP_OFFSET_SYSPARAM, 0 * 100);
+    status = sysparam_set_int32(TEMP_DEADBAND_SYSPARAM, 0 * 100);
     status = sysparam_set_int8(POLL_PERIOD_SYSPARAM, 30);
     
     status = sysparam_set_int8(VALVE_TYPE_SYSPARAM, 0);
     status = sysparam_set_int32(VALVE_SET_DURATION_SYSPARAM, 900);
     
     status = sysparam_set_int8(GARAGEDOOR_WORKING_TIME_SYSPARAM, 20);
-    status = sysparam_set_bool(GARAGEDOOR_HAS_STOP_SYSPARAM, false);
+    status = sysparam_set_bool(GARAGEDOOR_HAS_STOP_SYSPARAM, true);
     status = sysparam_set_bool(GARAGEDOOR_SENSOR_CLOSE_NC_SYSPARAM, false);
     status = sysparam_set_int8(GARAGEDOOR_SENSOR_OPEN_SYSPARAM, 0);
     status = sysparam_set_int8(GARAGEDOOR_SENSOR_OBSTRUCTION_SYSPARAM, 0);
     status = sysparam_set_bool(GARAGEDOOR_CONTROL_WITH_BUTTON_SYSPARAM, false);
-    status = sysparam_set_int32(GARAGEDOOR_BUTTON_TIME_SYSPARAM, 0.3 * 100);
+    status = sysparam_set_int32(INCHING_TIME_SYSPARAM, 0);
+    
+    status = sysparam_set_int32(COVERING_UP_TIME_SYSPARAM, 30 * 100);
+    status = sysparam_set_int32(COVERING_DOWN_TIME_SYSPARAM, 30 * 100);
+    status = sysparam_set_int8(COVERING_TYPE_SYSPARAM, 0);
+    status = sysparam_set_int32(COVERING_LAST_POSITION_SYSPARAM, 0);
+    
+    status = sysparam_set_int8(R_GPIO_SYSPARAM, INITIAL_R_GPIO);
+    status = sysparam_set_int8(G_GPIO_SYSPARAM, INITIAL_G_GPIO);
+    status = sysparam_set_int8(B_GPIO_SYSPARAM, INITIAL_B_GPIO);
+    status = sysparam_set_int8(W_GPIO_SYSPARAM, INITIAL_W_GPIO);
+    status = sysparam_set_int8(COLOR_BOOST_SYSPARAM, 1);
     
     status = sysparam_set_int32(TARGET_TEMPERATURE_SYSPARAM, 23 * 100);
     status = sysparam_set_int8(INIT_STATE_SW1_SYSPARAM, 0);
@@ -617,6 +714,10 @@ void factory_default_task() {
     status = sysparam_set_bool(LAST_STATE_SW3_SYSPARAM, false);
     status = sysparam_set_bool(LAST_STATE_SW4_SYSPARAM, false);
     status = sysparam_set_int8(LAST_TARGET_STATE_TH_SYSPARAM, 0);
+    
+    status = sysparam_set_int8(LAST_STATE_BRIGHTNESS_SYSPARAM, 100);
+    status = sysparam_set_int8(LAST_STATE_HUE_SYSPARAM, 0);
+    status = sysparam_set_int8(LAST_STATE_SATURATION_SYSPARAM, 0);
     
     if (status != SYSPARAM_OK) {
         printf("RC ! ERROR Flash problem\n");
@@ -649,6 +750,11 @@ void factory_default_call(const uint8_t gpio) {
     }
 }
 
+void factory_default_toggle_upcount() {
+    reset_toggle_counter++;
+    sdk_os_timer_arm(&factory_default_toggle_timer, 3100, 0);
+}
+
 void factory_default_toggle() {
     if (reset_toggle_counter > 10) {
         factory_default_call(0);
@@ -676,12 +782,20 @@ void save_states_callback() {
     sdk_os_timer_arm(&save_states_timer, 3000, 0);
 }
 
+// ***** Switches
+
 void switch1_on_callback(homekit_value_t value) {
     printf("RC > Toggle SW 1\n");
     switch1_on.value = value;
-    relay_write(switch1_on.value.bool_value, relay1_gpio);
-    led_code(LED_GPIO, FUNCTION_A);
-    printf("RC > Relay 1 -> %i\n", switch1_on.value.bool_value);
+    
+    if (device_type_static != 14) {
+        relay_write(switch1_on.value.bool_value, relay1_gpio);
+        led_code(LED_GPIO, FUNCTION_A);
+        printf("RC > Relay 1 -> %i\n", switch1_on.value.bool_value);
+    } else {
+        rgbw_set();
+    }
+    
     save_states_callback();
 }
 
@@ -728,6 +842,8 @@ homekit_value_t read_switch4_on_callback() {
     return switch4_on.value;
 }
 
+// ***** Water Valve
+
 void toggle_valve(const uint8_t gpio) {
     if (active.value.int_value == 1) {
         active.value.int_value = 0;
@@ -764,17 +880,26 @@ void valve_on_callback(homekit_value_t value) {
     if (active.value.int_value == 1) {
         printf("RC > Valve ON\n");
         relay_write(true, relay1_gpio);
-        remaining_duration.value = set_duration.value;
-        sdk_os_timer_arm(&extra_func_timer, 1000, 1);
+        
+        if (custom_garagedoor_has_stop.value.bool_value) {
+            remaining_duration.value = set_duration.value;
+            sdk_os_timer_arm(&extra_func_timer, 1000, 1);
+        }
     } else {
         printf("RC > Valve manual OFF\n");
-        sdk_os_timer_disarm(&extra_func_timer);
         relay_write(false, relay1_gpio);
-        remaining_duration.value.int_value = 0;
+        
+        if (custom_garagedoor_has_stop.value.bool_value) {
+            sdk_os_timer_disarm(&extra_func_timer);
+            remaining_duration.value.int_value = 0;
+        }
     }
     
     homekit_characteristic_notify(&in_use, in_use.value);
-    homekit_characteristic_notify(&remaining_duration, remaining_duration.value);
+    
+    if (custom_garagedoor_has_stop.value.bool_value) {
+        homekit_characteristic_notify(&remaining_duration, remaining_duration.value);
+    }
     
     led_code(LED_GPIO, FUNCTION_A);
 }
@@ -791,37 +916,39 @@ homekit_value_t read_remaining_duration_on_callback() {
     return remaining_duration.value;
 }
 
+// ***** Garage Door
+
 void garage_button_task() {
-    printf("RC > Garage Door relay working\n");
+    printf("RC > GD relay working\n");
     if (custom_garagedoor_sensor_open.value.int_value == 0) {
         sdk_os_timer_disarm(&extra_func_timer);
     }
     
     if (obstruction_detected.value.bool_value == false) {
         relay_write(true, relay1_gpio);
-        vTaskDelay(custom_garagedoor_button_time.value.float_value * 1000 / portTICK_PERIOD_MS);
+        vTaskDelay((custom_inching_time.value.float_value + 0.05) * 1000 / portTICK_PERIOD_MS);
         relay_write(false, relay1_gpio);
 
-        if (custom_garagedoor_has_stop.value.bool_value && gd_is_moving) {
+        if (custom_garagedoor_has_stop.value.bool_value && is_moving) {
             vTaskDelay(2500 / portTICK_PERIOD_MS);
             relay_write(true, relay1_gpio);
-            vTaskDelay(custom_garagedoor_button_time.value.float_value * 1000 / portTICK_PERIOD_MS);
+            vTaskDelay((custom_inching_time.value.float_value + 0.05) * 1000 / portTICK_PERIOD_MS);
             relay_write(false, relay1_gpio);
         }
 
         if (custom_garagedoor_sensor_open.value.int_value == 0) {
             if (current_door_state.value.int_value == 0 || current_door_state.value.int_value == 2) {
-                printf("RC > Garage Door -> CLOSING\n");
+                printf("RC > GD -> CLOSING\n");
                 current_door_state.value.int_value = 3;
                 sdk_os_timer_arm(&extra_func_timer, 1000, 1);
             } else if (current_door_state.value.int_value == 3) {
-                printf("RC > Garage Door -> OPENING\n");
+                printf("RC > GD -> OPENING\n");
                 current_door_state.value.int_value = 2;
                 sdk_os_timer_arm(&extra_func_timer, 1000, 1);
             }
         }
     } else {
-        printf("RC ! Garage Door -> OBSTRUCTION DETECTED - RELAY IS OFF\n");
+        printf("RC ! GD -> OBSTRUCTION DETECTED - RELAY IS OFF\n");
     }
 
     homekit_characteristic_notify(&current_door_state, current_door_state.value);
@@ -830,7 +957,7 @@ void garage_button_task() {
 }
 
 void garage_on_callback(homekit_value_t value) {
-    printf("RC > Garage Door activated: Current state -> %i, Target state -> %i\n", current_door_state.value.int_value, value.int_value);
+    printf("RC > GD activated: Current state -> %i, Target state -> %i\n", current_door_state.value.int_value, value.int_value);
     
     uint8_t current_door_state_simple = current_door_state.value.int_value;
     if (current_door_state_simple > 1) {
@@ -849,7 +976,7 @@ void garage_on_callback(homekit_value_t value) {
 
 void garage_on_button(const uint8_t gpio) {
     if (custom_garagedoor_control_with_button.value.bool_value) {
-        printf("RC > Garage Door: built-in button PRESSED\n");
+        printf("RC > GD: built-in button PRESSED\n");
         
         if (target_door_state.value.int_value == 0) {
             garage_on_callback(HOMEKIT_UINT8(1));
@@ -857,13 +984,13 @@ void garage_on_button(const uint8_t gpio) {
             garage_on_callback(HOMEKIT_UINT8(0));
         }
     } else {
-        printf("RC > Garage Door: built-in button DISABLED\n");
+        printf("RC > GD: built-in button DISABLED\n");
         led_code(LED_GPIO, FUNCTION_D);
     }
 }
 
 homekit_value_t read_garage_on_callback() {
-    printf("RC > Garage Door: returning target_door_state -> %i\n", target_door_state.value.int_value);
+    printf("RC > Returning target_door_state -> %i\n", target_door_state.value.int_value);
     return target_door_state.value;
 }
 
@@ -873,8 +1000,8 @@ static void homekit_gd_notify() {
 }
 
 void door_opened_0_fn_callback(const uint8_t gpio) {
-    printf("RC > Garage Door -> CLOSING\n");
-    gd_is_moving = true;
+    printf("RC > GD -> CLOSING\n");
+    is_moving = true;
     target_door_state.value.int_value = 1;
     current_door_state.value.int_value = 3;
     
@@ -882,8 +1009,8 @@ void door_opened_0_fn_callback(const uint8_t gpio) {
 }
 
 void door_opened_1_fn_callback(const uint8_t gpio) {
-    printf("RC > Garage Door -> OPENED\n");
-    gd_is_moving = false;
+    printf("RC > GD -> OPENED\n");
+    is_moving = false;
     target_door_state.value.int_value = 0;
     current_door_state.value.int_value = 0;
     
@@ -891,8 +1018,8 @@ void door_opened_1_fn_callback(const uint8_t gpio) {
 }
 
 void door_closed_0_fn_callback(const uint8_t gpio) {
-    printf("RC > Garage Door -> OPENING\n");
-    gd_is_moving = true;
+    printf("RC > GD -> OPENING\n");
+    is_moving = true;
     target_door_state.value.int_value = 0;
     current_door_state.value.int_value = 2;
     
@@ -904,15 +1031,15 @@ void door_closed_0_fn_callback(const uint8_t gpio) {
 }
 
 void door_closed_1_fn_callback(const uint8_t gpio) {
-    printf("RC > Garage Door -> CLOSED\n");
-    gd_time_state = 0;
-    gd_is_moving = false;
-    target_door_state.value.int_value = 1;
-    current_door_state.value.int_value = 1;
-    
     if (custom_garagedoor_sensor_open.value.int_value == 0) {
         sdk_os_timer_disarm(&extra_func_timer);
     }
+    
+    printf("RC > GD -> CLOSED\n");
+    gd_time_state = 0;
+    is_moving = false;
+    target_door_state.value.int_value = 1;
+    current_door_state.value.int_value = 1;
     
     homekit_gd_notify();
 }
@@ -926,9 +1053,9 @@ void door_opened_countdown_timer() {
         gd_time_state++;
     
         if (gd_time_state == custom_garagedoor_working_time.value.int_value) {
-            printf("RC > Garage Door -> OPENED\n");
+            printf("RC > GD -> OPENED\n");
             sdk_os_timer_disarm(&extra_func_timer);
-            gd_is_moving = false;
+            is_moving = false;
             gd_time_state = custom_garagedoor_working_time.value.int_value;
             target_door_state.value.int_value = 0;
             current_door_state.value.int_value = 0;
@@ -937,37 +1064,224 @@ void door_opened_countdown_timer() {
         }
     } else if (current_door_state.value.int_value == 3) {
         gd_time_state--;
-         if (gd_time_state == 0) {
-             printf("RC > Garage Door -> CLOSED\n");
-             sdk_os_timer_disarm(&extra_func_timer);
-             gd_is_moving = false;
-             target_door_state.value.int_value = 1;
-             current_door_state.value.int_value = 1;
-             
-             homekit_gd_notify();
-         }
+        
+        if (gd_time_state == 0) {
+            sdk_os_timer_disarm(&extra_func_timer);
+        }
     }
 }
 
 void door_obstructed_0_fn_callback(const uint8_t gpio) {
-    printf("RC > Garage Door -> OBSTRUCTION REMOVED\n");
+    printf("RC > GD -> OBSTRUCTION REMOVED\n");
     obstruction_detected.value.bool_value = false;
     homekit_characteristic_notify(&obstruction_detected, obstruction_detected.value);
 }
 
 void door_obstructed_1_fn_callback(const uint8_t gpio) {
-    printf("RC > Garage Door -> OBSTRUCTED\n");
+    printf("RC > GD -> OBSTRUCTED\n");
     obstruction_detected.value.bool_value = true;
     homekit_characteristic_notify(&obstruction_detected, obstruction_detected.value);
 }
+
+// ***** Window Covering
+
+void normalize_actual_pos() {
+    if (covering_actual_pos < 0) {
+        covering_actual_pos = 0;
+    } else if (covering_actual_pos > 100) {
+        covering_actual_pos = 100;
+    }
+}
+
+void covering_stop() {
+    sdk_os_timer_disarm(&extra_func_timer);
+    
+    relay_write(false, relay1_gpio);
+    relay_write(false, RELAY2_GPIO);
+    
+    normalize_actual_pos();
+    
+    covering_current_position.value.int_value = covering_actual_pos;
+    homekit_characteristic_notify(&covering_current_position, covering_current_position.value);
+    
+    covering_target_position.value = covering_current_position.value;
+    homekit_characteristic_notify(&covering_target_position, covering_target_position.value);
+    
+    covering_position_state.value.int_value = 2;
+    homekit_characteristic_notify(&covering_position_state, covering_position_state.value);
+    
+    printf("RC > Covering stoped at %f\n", covering_actual_pos);
+    led_code(LED_GPIO, FUNCTION_A);
+    
+    save_states_callback();
+}
+
+void covering_on_callback(homekit_value_t value) {
+    printf("RC > Covering activated: Current pos -> %i, Target pos -> %i\n", covering_current_position.value.int_value, value.int_value);
+    led_code(LED_GPIO, FUNCTION_A);
+    
+    covering_target_position.value = value;
+    homekit_characteristic_notify(&covering_target_position, covering_target_position.value);
+    
+    normalize_actual_pos();
+    
+    gd_time_state = 0;      // Used as covering offset to add extra time when target position completely closed or opened
+    if (value.int_value == 0 || value.int_value == 100) {
+        gd_time_state = 15;
+    }
+    
+    if (value.int_value < covering_current_position.value.int_value) {
+        relay_write(false, RELAY2_GPIO);
+        covering_position_state.value.int_value = 0;
+        
+        sdk_os_timer_arm(&extra_func_timer, COVERING_POLL_PERIOD_MS, 1);
+        relay_write(true, relay1_gpio);
+    } else if (value.int_value > covering_current_position.value.int_value){
+        relay_write(false, relay1_gpio);
+        covering_position_state.value.int_value = 1;
+        
+        sdk_os_timer_arm(&extra_func_timer, COVERING_POLL_PERIOD_MS, 1);
+        relay_write(true, RELAY2_GPIO);
+    } else {
+        covering_stop();
+    }
+    
+    homekit_characteristic_notify(&covering_position_state, covering_position_state.value);
+}
+
+void covering_worker() {
+    void normalize_covering_current_position() {
+        if (covering_actual_pos < 0) {
+            covering_current_position.value.int_value = 0;
+        } else if (covering_actual_pos > 100) {
+            covering_current_position.value.int_value = 100;
+        } else {
+            covering_current_position.value.int_value = covering_actual_pos;
+        }
+        
+        if (((uint8_t)covering_actual_pos * COVERING_POLL_PERIOD_MS) % 2000 == 0) {
+            printf("RC > Covering moving at %f\n", covering_actual_pos);
+            homekit_characteristic_notify(&covering_current_position, covering_current_position.value);
+        }
+    }
+    
+    switch (covering_position_state.value.int_value) {
+        case 0: // Down
+            covering_actual_pos -= covering_step_time_down;
+            normalize_covering_current_position();
+
+            if ((covering_target_position.value.int_value - gd_time_state) >= covering_actual_pos) {
+                covering_stop();
+            }
+            break;
+            
+        case 1: // Up
+            covering_actual_pos += covering_step_time_up;
+            normalize_covering_current_position();
+            
+            if ((covering_target_position.value.int_value + gd_time_state) <= covering_actual_pos) {
+                covering_stop();
+            }
+            break;
+            
+        default:    // case 2:  // Stop
+            covering_stop();
+            break;
+    }
+}
+
+homekit_value_t read_covering_on_callback() {
+    printf("RC > Returning covering_target_position -> %i\n", covering_target_position.value.int_value);
+    return covering_target_position.value;
+}
+
+void covering_toggle_up(const uint8_t gpio) {
+    covering_on_callback(HOMEKIT_UINT8(100));
+}
+
+void covering_toggle_down(const uint8_t gpio) {
+    covering_on_callback(HOMEKIT_UINT8(0));
+    
+    factory_default_toggle_upcount();
+}
+
+void covering_toggle_stop(const uint8_t gpio) {
+    covering_on_callback(covering_current_position.value);
+}
+
+void covering_button_up(const uint8_t gpio) {
+    if (covering_position_state.value.int_value == 1) {
+        covering_on_callback(covering_current_position.value);
+    } else {
+        covering_on_callback(HOMEKIT_UINT8(100));
+    }
+}
+
+void covering_button_down(const uint8_t gpio) {
+    if (covering_position_state.value.int_value == 0) {
+        covering_on_callback(covering_current_position.value);
+    } else {
+        covering_on_callback(HOMEKIT_UINT8(0));
+    }
+    
+    factory_default_toggle_upcount();
+}
+
+// ***** Lock Mechanism
+
+void lock_timer() {
+    sdk_os_timer_disarm(&extra_func_timer);
+    
+    printf("RC > Lock closed\n");
+    relay_write(false, relay1_gpio);
+    
+    lock_target_state.value.int_value = 1;
+    homekit_characteristic_notify(&lock_target_state, lock_target_state.value);
+    
+    lock_current_state.value.int_value = 1;
+    homekit_characteristic_notify(&lock_current_state, lock_current_state.value);
+}
+
+void lock_on_callback(homekit_value_t value) {
+    lock_target_state.value = value;
+    
+    lock_current_state.value = value;
+    homekit_characteristic_notify(&lock_current_state, lock_current_state.value);
+    
+    if (value.int_value == 0) {
+        sdk_os_timer_disarm(&extra_func_timer);
+        
+        printf("RC > Lock opened\n");
+        led_code(LED_GPIO, FUNCTION_A);
+        relay_write(true, relay1_gpio);
+        
+        if (custom_inching_time.value.float_value > 0) {
+            sdk_os_timer_arm(&extra_func_timer, (custom_inching_time.value.float_value) * 1000, 0);
+        }
+    } else {
+        lock_timer();
+    }
+}
+
+void lock_intr_callback(const uint8_t gpio) {
+    lock_on_callback(HOMEKIT_UINT8(0));
+    
+    factory_default_toggle_upcount();
+}
+
+homekit_value_t read_lock_on_callback() {
+    printf("RC > Returning lock_target_state -> %i\n", lock_target_state.value.int_value);
+    return lock_target_state.value;
+}
+
+// ***** Buttons
 
 void button_simple1_intr_callback(const uint8_t gpio) {
     switch1_on.value.bool_value = !switch1_on.value.bool_value;
     switch1_on_callback(switch1_on.value);
     homekit_characteristic_notify(&switch1_on, switch1_on.value);
     
-    reset_toggle_counter++;
-    sdk_os_timer_arm(&factory_default_toggle_timer, 3100, 0);
+    factory_default_toggle_upcount();
 }
 
 void button_simple2_intr_callback(const uint8_t gpio) {
@@ -1003,6 +1317,8 @@ void button_event3_intr_callback(const uint8_t gpio) {
     led_code(LED_GPIO, FUNCTION_C);
 }
 
+// ***** Thermostat
+
 void th_button_intr_callback(const uint8_t gpio) {
     uint8_t state = target_state.value.int_value + 1;
     switch (state) {
@@ -1023,11 +1339,86 @@ void th_button_intr_callback(const uint8_t gpio) {
             break;
     }
     
-    target_state.value = HOMEKIT_UINT8(state);
+    target_state.value.int_value = state;
     homekit_characteristic_notify(&target_state, target_state.value);
     
-    update_state();
+    update_th_state();
 }
+
+void th_target(homekit_value_t value) {
+    target_state.value = value;
+    switch (target_state.value.int_value) {
+        case 1:
+            printf("RC > HEAT\n");
+            led_code(LED_GPIO, FUNCTION_B);
+            break;
+            
+        case 2:
+            printf("RC > COOL\n");
+            led_code(LED_GPIO, FUNCTION_C);
+            break;
+            
+        default:
+            printf("RC > OFF\n");
+            led_code(LED_GPIO, FUNCTION_A);
+            break;
+    }
+    
+    update_th_state();
+}
+
+homekit_value_t read_th_target() {
+    return target_state.value;
+}
+
+void update_th_state() {
+    void th_state_off() {
+        current_state.value.int_value = 0;
+        relay_write(false, relay1_gpio);
+        homekit_characteristic_notify(&current_state, current_state.value);
+    }
+    
+    switch (target_state.value.int_value) {
+        case 0:
+            if (current_state.value.int_value != 0) {
+                th_state_off();
+            }
+            break;
+            
+        case 1:
+            if (current_state.value.int_value == 0) {
+                if (current_temperature.value.float_value < (target_temperature.value.float_value - temp_deadband.value.float_value)) {
+                    current_state.value.int_value = 1;
+                    relay_write(true, relay1_gpio);
+                    homekit_characteristic_notify(&current_state, current_state.value);
+                }
+            } else if (current_temperature.value.float_value >= target_temperature.value.float_value) {
+                th_state_off();
+            }
+            break;
+            
+        case 2:
+            if (current_state.value.int_value == 0) {
+                if (current_temperature.value.float_value > (target_temperature.value.float_value + temp_deadband.value.float_value)) {
+                    current_state.value.int_value = 2;
+                    relay_write(true, relay1_gpio);
+                    homekit_characteristic_notify(&current_state, current_state.value);
+                }
+            } else if (current_temperature.value.float_value <= target_temperature.value.float_value) {
+                th_state_off();
+            }
+            break;
+            
+        default:    // case 3
+            target_state.value.int_value = 0;
+            homekit_characteristic_notify(&target_state, target_state.value);
+            break;
+    }
+    
+    save_states_callback();
+}
+
+// ***** Temperature and Humidity sensors
 
 void temperature_sensor_worker() {
     float humidity_value, temperature_value;
@@ -1045,7 +1436,9 @@ void temperature_sensor_worker() {
         ds18b20_addr_t ds18b20_addr[1];
         
         if (ds18b20_scan_devices(extra_gpio, ds18b20_addr, 1) == 1) {
-            temperature_value = ds18b20_read_single(extra_gpio);
+            float temps[1];
+            ds18b20_measure_and_read_multi(extra_gpio, ds18b20_addr, 1, temps);
+            temperature_value = temps[0];
             humidity_value = 0.0;
             get_temp = true;
         }
@@ -1065,7 +1458,7 @@ void temperature_sensor_worker() {
             homekit_characteristic_notify(&current_temperature, current_temperature.value);
 
             if (device_type_static == 5) {
-                update_state();
+                update_th_state();
             }
         }
         
@@ -1096,6 +1489,119 @@ void temperature_sensor_worker() {
     }
 }
 
+// ***** RGBW
+
+typedef union {
+    struct {
+        uint16_t white;
+        uint16_t blue;
+        uint16_t green;
+        uint16_t red;
+    };
+    uint64_t color;
+} rgb_color_t;
+
+rgb_color_t target_rgbw_color = { { 0, 0, 0, 0 } };
+
+//http://blog.saikoled.com/post/44677718712/how-to-convert-from-hsi-to-rgb-white
+void hsi2rgbw(float h, float s, float i, rgb_color_t* rgbw) {
+    const uint8_t color_boost = custom_color_boost.value.int_value;
+    
+    while (h < 0) {
+        h += 360.0F;
+        
+    }
+    while (h >= 360) {
+        h -= 360.0F;
+        
+    }
+    
+    h = 3.14159F * h / 180.0F;
+    s /= 100.0F;
+    i /= 100.0F;
+    s = s > 0 ? (s < 1 ? s : 1) : 0;
+    i = i > 0 ? (i < 1 ? i : 1) : 0;
+    
+    if (h < 2.09439) {
+        rgbw->red   = PWM_RGBW_SCALE * i * color_boost / 3 * (1 + s * cos(h) / cos(1.047196667 - h));
+        rgbw->green = PWM_RGBW_SCALE * i * color_boost / 3 * (1 + s * (1 - cos(h) / cos(1.047196667 - h)));
+        rgbw->blue  = PWM_RGBW_SCALE * i * color_boost / 3 * (1 - s);
+        rgbw->white = PWM_RGBW_SCALE * i * (1 - s);
+    } else if (h < 4.188787) {
+        h = h - 2.09439;
+        rgbw->green = PWM_RGBW_SCALE * i * color_boost / 3 * (1 + s * cos(h) / cos(1.047196667 - h));
+        rgbw->blue  = PWM_RGBW_SCALE * i * color_boost / 3 * (1 + s * (1 - cos(h) / cos(1.047196667 - h)));
+        rgbw->red   = PWM_RGBW_SCALE * i * color_boost / 3 * (1 - s);
+        rgbw->white = PWM_RGBW_SCALE * i * (1 - s);
+    } else {
+        h = h - 4.188787;
+        rgbw->blue  = PWM_RGBW_SCALE * i * color_boost / 3 * (1 + s * cos(h) / cos(1.047196667 - h));
+        rgbw->red   = PWM_RGBW_SCALE * i * color_boost / 3 * (1 + s * (1 - cos(h) / cos(1.047196667 - h)));
+        rgbw->green = PWM_RGBW_SCALE * i * color_boost / 3 * (1 - s);
+        rgbw->white = PWM_RGBW_SCALE * i * (1 - s);
+    }
+}
+
+void rgbw_pwm(rgb_color_t *rgbw_color) {
+    printf("RC > RGBW -> %i, %i, %i, %i\n", rgbw_color->red, rgbw_color->green, rgbw_color->blue, rgbw_color->white);
+    multipwm_stop(&pwm_info);
+    
+    multipwm_set_duty(&pwm_info, 0, rgbw_color->red);
+    multipwm_set_duty(&pwm_info, 1, rgbw_color->green);
+    multipwm_set_duty(&pwm_info, 2, rgbw_color->blue);
+
+    if (w_gpio != 0) {
+        multipwm_set_duty(&pwm_info, 3, rgbw_color->white);
+    }
+
+    multipwm_start(&pwm_info);
+}
+
+void rgbw_set() {
+    if (switch1_on.value.bool_value) {
+        printf("RC > Hue -> %0.0f, Sat -> %0.0f, Bri -> %i\n", hue.value.float_value, saturation.value.float_value, brightness.value.int_value);
+        hsi2rgbw(hue.value.float_value, saturation.value.float_value, brightness.value.int_value, &target_rgbw_color);
+    } else {
+        target_rgbw_color.red = 0;
+        target_rgbw_color.green = 0;
+        target_rgbw_color.blue = 0;
+        target_rgbw_color.white = 0;
+    }
+    
+    rgbw_pwm(&target_rgbw_color);
+    
+    save_states_callback();
+}
+
+void brightness_callback(homekit_value_t value) {
+    brightness.value = value;
+    rgbw_set();
+}
+
+void hue_callback(homekit_value_t value) {
+    hue.value = value;
+    rgbw_set();
+}
+
+void saturation_callback(homekit_value_t value) {
+    saturation.value = value;
+    rgbw_set();
+}
+
+homekit_value_t read_brightness_callback() {
+    return brightness.value;
+}
+
+homekit_value_t read_hue_callback() {
+    return hue.value;
+}
+
+homekit_value_t read_saturation_callback() {
+    return saturation.value;
+}
+
+// ***** Identify
+
 void identify_task() {
     relay_write(false, relay1_gpio);
     
@@ -1123,6 +1629,8 @@ void identify(homekit_value_t _value) {
             break;
     }
 }
+
+// ***** IP Address
 
 homekit_value_t read_ip_addr() {
     struct ip_info info;
@@ -1163,38 +1671,6 @@ void hardware_init() {
     
     bool pullup = true;
     switch (device_type_static) {
-        case 1:
-            if (board_type.value.int_value == 3) {  // It is a Shelly1
-                relay1_gpio = S1_RELAY_GPIO;
-                extra_gpio = S1_TOGGLE_GPIO;
-                pullup = false;
-            } else {                                // It is a Sonoff
-                enable_sonoff_device();
-                
-                adv_button_register_callback_fn(button1_gpio, button_simple1_intr_callback, 1);
-                adv_button_register_callback_fn(button1_gpio, factory_default_call, 5);
-            }
-            
-            gpio_enable(relay1_gpio, GPIO_OUTPUT);
-            relay_write(switch1_on.value.bool_value, relay1_gpio);
-            
-            switch (external_toggle1.value.int_value) {
-                case 1:
-                    adv_toggle_create(extra_gpio, pullup);
-                    adv_toggle_register_callback_fn(extra_gpio, button_simple1_intr_callback, 0);
-                    break;
-                    
-                case 2:
-                    adv_toggle_create(extra_gpio, pullup);
-                    adv_toggle_register_callback_fn(extra_gpio, button_simple1_intr_callback, 2);
-                    break;
-                    
-                default:
-                    break;
-            }
-
-            break;
-            
         case 2:
             if (board_type.value.int_value == 3) {  // It is a Shelly2
                 relay1_gpio = S2_RELAY1_GPIO;
@@ -1240,12 +1716,12 @@ void hardware_init() {
             
             switch (external_toggle2.value.int_value) {
                 case 1:
-                    adv_toggle_create(button2_gpio, false);
+                    adv_toggle_create(button2_gpio, pullup);
                     adv_toggle_register_callback_fn(button2_gpio, button_simple2_intr_callback, 0);
                     break;
                     
                 case 2:
-                    adv_toggle_create(button2_gpio, false);
+                    adv_toggle_create(button2_gpio, pullup);
                     adv_toggle_register_callback_fn(button2_gpio, button_simple2_intr_callback, 2);
                     break;
                     
@@ -1445,8 +1921,171 @@ void hardware_init() {
             relay_write(switch3_on.value.bool_value, RELAY3_GPIO);
             break;
             
-        default:
-            // A wish from compiler
+        case 12:
+            if (board_type.value.int_value == 3) {  // It is a Shelly2
+                relay1_gpio = S2_RELAY1_GPIO;
+                button1_gpio = S2_TOGGLE1_GPIO;
+                button2_gpio = S2_TOGGLE2_GPIO;
+                pullup = false;
+            } else {                                // It is a Sonoff
+                enable_sonoff_device();
+                
+                adv_button_destroy(button1_gpio);
+                
+                adv_button_create(BUTTON3_GPIO, true);
+                
+                adv_button_register_callback_fn(BUTTON3_GPIO, factory_default_call, 5);
+                
+                if (board_type.value.int_value == 4) {
+                    button1_gpio = 3;
+                }
+            }
+            
+            gpio_enable(relay1_gpio, GPIO_OUTPUT);
+            relay_write(false, relay1_gpio);
+            
+            gpio_enable(RELAY2_GPIO, GPIO_OUTPUT);
+            relay_write(false, RELAY2_GPIO);
+            
+            switch (external_toggle1.value.int_value) {
+                case 1:
+                    adv_toggle_create(button1_gpio, pullup);
+                    adv_toggle_register_callback_fn(button1_gpio, covering_button_down, 0);
+                    
+                    adv_toggle_create(button2_gpio, pullup);
+                    adv_toggle_register_callback_fn(button2_gpio, covering_button_up, 0);
+                    break;
+                    
+                case 2:
+                    adv_toggle_create(button1_gpio, pullup);
+                    adv_toggle_register_callback_fn(button1_gpio, covering_toggle_down, 0);
+                    adv_toggle_register_callback_fn(button1_gpio, covering_toggle_stop, 1);
+                    
+                    adv_toggle_create(button2_gpio, pullup);
+                    adv_toggle_register_callback_fn(button2_gpio, covering_toggle_up, 0);
+                    adv_toggle_register_callback_fn(button2_gpio, covering_toggle_stop, 1);
+                    break;
+                    
+                default:
+                    break;
+            }
+            
+# define STEP_TIME(x)       ((100.0 / (x)) * (COVERING_POLL_PERIOD_MS / 1000.0))
+            covering_step_time_up = STEP_TIME(custom_covering_up_time.value.float_value);
+            covering_step_time_down = STEP_TIME(custom_covering_down_time.value.float_value);
+            
+            printf("RC > covering_step_time_up = %f\n", covering_step_time_up);
+            printf("RC > covering_step_time_down = %f\n", covering_step_time_down);
+            
+            sdk_os_timer_setfn(&extra_func_timer, covering_worker, NULL);
+            
+            break;
+            
+        case 13:
+            if (board_type.value.int_value == 3) {  // It is a Shelly1
+                relay1_gpio = S1_RELAY_GPIO;
+                extra_gpio = S1_TOGGLE_GPIO;
+                pullup = false;
+            } else {                                // It is a Sonoff
+                enable_sonoff_device();
+                
+                adv_button_register_callback_fn(button1_gpio, lock_intr_callback, 1);
+                adv_button_register_callback_fn(button1_gpio, factory_default_call, 5);
+            }
+            
+            gpio_enable(relay1_gpio, GPIO_OUTPUT);
+            relay_write(false, relay1_gpio);
+            
+            switch (external_toggle1.value.int_value) {
+                case 1:
+                    adv_toggle_create(extra_gpio, pullup);
+                    adv_toggle_register_callback_fn(extra_gpio, lock_intr_callback, 0);
+                case 2:
+                    adv_toggle_create(extra_gpio, pullup);
+                    adv_toggle_register_callback_fn(extra_gpio, lock_intr_callback, 2);
+                    break;
+                    
+                default:
+                    break;
+            }
+            
+            sdk_os_timer_setfn(&extra_func_timer, lock_timer, NULL);
+            
+            break;
+            
+        case 14:
+            adv_button_create(button1_gpio, true);
+            adv_button_register_callback_fn(button1_gpio, button_simple1_intr_callback, 1);
+            adv_button_register_callback_fn(button1_gpio, factory_default_call, 5);
+            
+            r_gpio = custom_r_gpio.value.int_value;
+            g_gpio = custom_g_gpio.value.int_value;
+            b_gpio = custom_b_gpio.value.int_value;
+            w_gpio = custom_w_gpio.value.int_value;
+            
+            if (r_gpio == g_gpio || r_gpio == b_gpio || r_gpio == w_gpio || g_gpio == b_gpio || g_gpio == w_gpio || b_gpio == w_gpio) {
+                custom_r_gpio.value.int_value = INITIAL_R_GPIO;
+                custom_g_gpio.value.int_value = INITIAL_G_GPIO;
+                custom_b_gpio.value.int_value = INITIAL_B_GPIO;
+                custom_w_gpio.value.int_value = INITIAL_W_GPIO;
+                
+                r_gpio = custom_r_gpio.value.int_value;
+                g_gpio = custom_g_gpio.value.int_value;
+                b_gpio = custom_b_gpio.value.int_value;
+                w_gpio = custom_w_gpio.value.int_value;
+                
+                change_settings_callback();
+            }
+            
+            multipwm_init(&pwm_info);
+            
+            pwm_info.channels = 3;
+            
+            multipwm_set_freq(&pwm_info, PWM_RGBW_SCALE);
+
+            multipwm_set_pin(&pwm_info, 0, r_gpio);
+            multipwm_set_pin(&pwm_info, 1, g_gpio);
+            multipwm_set_pin(&pwm_info, 2, b_gpio);
+            
+            if (w_gpio != 0) {
+                pwm_info.channels++;
+                multipwm_set_pin(&pwm_info, 3, w_gpio);
+            }
+            
+            rgbw_set();
+            
+            break;
+            
+        default:    // case 1:
+            if (board_type.value.int_value == 3) {  // It is a Shelly1
+                relay1_gpio = S1_RELAY_GPIO;
+                extra_gpio = S1_TOGGLE_GPIO;
+                pullup = false;
+            } else {                                // It is a Sonoff
+                enable_sonoff_device();
+                
+                adv_button_register_callback_fn(button1_gpio, button_simple1_intr_callback, 1);
+                adv_button_register_callback_fn(button1_gpio, factory_default_call, 5);
+            }
+            
+            gpio_enable(relay1_gpio, GPIO_OUTPUT);
+            relay_write(switch1_on.value.bool_value, relay1_gpio);
+            
+            switch (external_toggle1.value.int_value) {
+                case 1:
+                    adv_toggle_create(extra_gpio, pullup);
+                    adv_toggle_register_callback_fn(extra_gpio, button_simple1_intr_callback, 0);
+                    break;
+                    
+                case 2:
+                    adv_toggle_create(extra_gpio, pullup);
+                    adv_toggle_register_callback_fn(extra_gpio, button_simple1_intr_callback, 2);
+                    break;
+                    
+                default:
+                    break;
+            }
+            
             break;
     }
     
@@ -1501,18 +2140,6 @@ void settings_init() {
     
     status = sysparam_get_int8(DEVICE_TYPE_SYSPARAM, &int8_value);
     if (status == SYSPARAM_OK) {
-        // For old Shelly device types (device type 12 and 13)
-        if (int8_value == 12) {
-            int8_value = 1;
-            board_type.value.int_value = 3;
-        }
-        
-        if (int8_value == 13) {
-            int8_value = 2;
-            board_type.value.int_value = 3;
-        }
-        // END - For old Shelly device types (device type 12 and 13)
-        
         device_type.value.int_value = int8_value;
         device_type_static = int8_value;
     } else {
@@ -1572,6 +2199,16 @@ void settings_init() {
         }
     }
     
+    status = sysparam_get_int32(TEMP_DEADBAND_SYSPARAM, &int32_value);
+    if (status == SYSPARAM_OK) {
+        temp_deadband.value.float_value = int32_value / 100.00f;
+    } else {
+        status = sysparam_set_int32(TEMP_DEADBAND_SYSPARAM, 0);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
     status = sysparam_get_int8(POLL_PERIOD_SYSPARAM, &int8_value);
     if (status == SYSPARAM_OK) {
         poll_period.value.int_value = int8_value;
@@ -1607,7 +2244,7 @@ void settings_init() {
     if (status == SYSPARAM_OK) {
         custom_garagedoor_has_stop.value.bool_value = bool_value;
     } else {
-        status = sysparam_set_bool(GARAGEDOOR_HAS_STOP_SYSPARAM, false);
+        status = sysparam_set_bool(GARAGEDOOR_HAS_STOP_SYSPARAM, true);
         if (status != SYSPARAM_OK) {
             flash_error = status;
         }
@@ -1653,11 +2290,91 @@ void settings_init() {
         }
     }
     
-    status = sysparam_get_int32(GARAGEDOOR_BUTTON_TIME_SYSPARAM, &int32_value);
+    status = sysparam_get_int32(INCHING_TIME_SYSPARAM, &int32_value);
     if (status == SYSPARAM_OK) {
-        custom_garagedoor_button_time.value.float_value = int32_value / 100.00f;
+        custom_inching_time.value.float_value = int32_value / 100.00f;
     } else {
-        status = sysparam_set_int32(GARAGEDOOR_BUTTON_TIME_SYSPARAM, 0.30 * 100);
+        status = sysparam_set_int32(INCHING_TIME_SYSPARAM, 0);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
+    status = sysparam_get_int32(COVERING_UP_TIME_SYSPARAM, &int32_value);
+    if (status == SYSPARAM_OK) {
+        custom_covering_up_time.value.float_value = int32_value / 100.00f;
+    } else {
+        status = sysparam_set_int32(COVERING_UP_TIME_SYSPARAM, 30 * 100);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
+    status = sysparam_get_int32(COVERING_DOWN_TIME_SYSPARAM, &int32_value);
+    if (status == SYSPARAM_OK) {
+        custom_covering_down_time.value.float_value = int32_value / 100.00f;
+    } else {
+        status = sysparam_set_int32(COVERING_DOWN_TIME_SYSPARAM, 30 * 100);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
+    status = sysparam_get_int8(COVERING_TYPE_SYSPARAM, &int8_value);
+    if (status == SYSPARAM_OK) {
+        custom_covering_type.value.int_value = int8_value;
+    } else {
+        status = sysparam_set_int8(COVERING_TYPE_SYSPARAM, 0);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
+    status = sysparam_get_int8(R_GPIO_SYSPARAM, &int8_value);
+    if (status == SYSPARAM_OK) {
+        custom_r_gpio.value.int_value = int8_value;
+    } else {
+        status = sysparam_set_int8(R_GPIO_SYSPARAM, INITIAL_R_GPIO);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
+    status = sysparam_get_int8(G_GPIO_SYSPARAM, &int8_value);
+    if (status == SYSPARAM_OK) {
+        custom_g_gpio.value.int_value = int8_value;
+    } else {
+        status = sysparam_set_int8(G_GPIO_SYSPARAM, INITIAL_G_GPIO);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
+    status = sysparam_get_int8(B_GPIO_SYSPARAM, &int8_value);
+    if (status == SYSPARAM_OK) {
+        custom_b_gpio.value.int_value = int8_value;
+    } else {
+        status = sysparam_set_int8(B_GPIO_SYSPARAM, INITIAL_B_GPIO);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
+    status = sysparam_get_int8(W_GPIO_SYSPARAM, &int8_value);
+    if (status == SYSPARAM_OK) {
+        custom_w_gpio.value.int_value = int8_value;
+    } else {
+        status = sysparam_set_int8(W_GPIO_SYSPARAM, INITIAL_W_GPIO);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
+    status = sysparam_get_int8(COLOR_BOOST_SYSPARAM, &int8_value);
+    if (status == SYSPARAM_OK) {
+        custom_color_boost.value.int_value = int8_value;
+    } else {
+        status = sysparam_set_int8(COLOR_BOOST_SYSPARAM, 1);
         if (status != SYSPARAM_OK) {
             flash_error = status;
         }
@@ -1862,6 +2579,48 @@ void settings_init() {
         }
     }
     
+    status = sysparam_get_int32(COVERING_LAST_POSITION_SYSPARAM, &int32_value);
+    if (status == SYSPARAM_OK) {
+        covering_actual_pos = int32_value / 100.00f;
+        covering_current_position.value.int_value = covering_actual_pos;
+        covering_target_position.value.int_value = covering_actual_pos;
+    } else {
+        status = sysparam_set_int32(COVERING_LAST_POSITION_SYSPARAM, 0);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
+    status = sysparam_get_int8(LAST_STATE_BRIGHTNESS_SYSPARAM, &int8_value);
+    if (status == SYSPARAM_OK) {
+        brightness.value.int_value = int8_value;
+    } else {
+        status = sysparam_set_int8(LAST_STATE_BRIGHTNESS_SYSPARAM, 100);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
+    status = sysparam_get_int32(LAST_STATE_HUE_SYSPARAM, &int32_value);
+    if (status == SYSPARAM_OK) {
+        hue.value.float_value = int32_value;
+    } else {
+        status = sysparam_set_int32(LAST_STATE_HUE_SYSPARAM, 0);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
+    status = sysparam_get_int8(LAST_STATE_SATURATION_SYSPARAM, &int8_value);
+    if (status == SYSPARAM_OK) {
+        saturation.value.float_value = int8_value;
+    } else {
+        status = sysparam_set_int8(LAST_STATE_SATURATION_SYSPARAM, 0);
+        if (status != SYSPARAM_OK) {
+            flash_error = status;
+        }
+    }
+    
     if (flash_error == SYSPARAM_OK) {
         hardware_init();
     } else {
@@ -1888,11 +2647,14 @@ homekit_characteristic_t temp_service_name = HOMEKIT_CHARACTERISTIC_(NAME, "Temp
 homekit_characteristic_t hum_service_name = HOMEKIT_CHARACTERISTIC_(NAME, "Humidity");
 homekit_characteristic_t valve_service_name = HOMEKIT_CHARACTERISTIC_(NAME, "Water Valve");
 homekit_characteristic_t garage_service_name = HOMEKIT_CHARACTERISTIC_(NAME, "Garage Door");
+homekit_characteristic_t covering_service_name = HOMEKIT_CHARACTERISTIC_(NAME, "Window");
+homekit_characteristic_t lock_service_name = HOMEKIT_CHARACTERISTIC_(NAME, "Lock");
+homekit_characteristic_t rgbw_service_name = HOMEKIT_CHARACTERISTIC_(NAME, "RGBW");
 
 homekit_characteristic_t setup_service_name = HOMEKIT_CHARACTERISTIC_(NAME, "Setup", .id=100);
 homekit_characteristic_t device_type_name = HOMEKIT_CHARACTERISTIC_(CUSTOM_DEVICE_TYPE_NAME, "", .id=101);
 
-homekit_characteristic_t firmware = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISION, "0.6.1");
+homekit_characteristic_t firmware = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISION, RAVENCORE_VERSION);
 
 homekit_accessory_category_t accessory_category;
 
@@ -1914,7 +2676,7 @@ void create_accessory_name() {
 homekit_server_config_t config;
 
 void create_accessory() {
-    printf("RC > Creating HomeKit accessory\n");
+    printf("RC > Creating HK accessory\n");
     
     uint8_t service_count = 3, service_number = 2;
     
@@ -1980,6 +2742,21 @@ void create_accessory() {
             accessory_category = homekit_accessory_category_switch;
             break;
             
+        case 12:
+            service_count += 0;
+            accessory_category = homekit_accessory_category_window_covering;
+            break;
+            
+        case 13:
+            service_count += 0;
+            accessory_category = homekit_accessory_category_door_lock;
+            break;
+            
+        case 14:
+            service_count += 0;
+            accessory_category = homekit_accessory_category_lightbulb;
+            break;
+            
         default:    // case 1
             service_count += 0;
             accessory_category = homekit_accessory_category_switch;
@@ -1991,8 +2768,6 @@ void create_accessory() {
 
     homekit_accessory_t *sonoff = accessories[0] = calloc(1, sizeof(homekit_accessory_t));
         sonoff->id = 1;
-        sonoff->category = accessory_category;
-        sonoff->config_number = 000601;   // Matches as example: firmware_revision 2.3.8 = 02.03.10 (octal) = config_number 020310
         sonoff->services = calloc(service_count, sizeof(homekit_service_t*));
 
             homekit_service_t *sonoff_info = sonoff->services[0] = calloc(1, sizeof(homekit_service_t));
@@ -2106,19 +2881,28 @@ void create_accessory() {
                     sonoff_hum->characteristics[1] = &current_humidity;
             }
     
-            void charac_valve(const uint8_t service) {
+            void charac_valve(const uint8_t service, bool with_timer) {
                 homekit_service_t *sonoff_valve = sonoff->services[service] = calloc(1, sizeof(homekit_service_t));
                 sonoff_valve->id = 44;
                 sonoff_valve->type = HOMEKIT_SERVICE_VALVE;
                 sonoff_valve->primary = true;
-                sonoff_valve->characteristics = calloc(8, sizeof(homekit_characteristic_t*));
+                
+                uint8_t characs_size = 6;
+                if (with_timer) {
+                    characs_size += 2;
+                }
+                
+                sonoff_valve->characteristics = calloc(characs_size, sizeof(homekit_characteristic_t*));
                     sonoff_valve->characteristics[0] = &valve_service_name;
                     sonoff_valve->characteristics[1] = &active;
                     sonoff_valve->characteristics[2] = &in_use;
                     sonoff_valve->characteristics[3] = &valve_type;
-                    sonoff_valve->characteristics[4] = &set_duration;
-                    sonoff_valve->characteristics[5] = &remaining_duration;
-                    sonoff_valve->characteristics[6] = &show_setup;
+                    sonoff_valve->characteristics[4] = &show_setup;
+                
+                    if (with_timer) {
+                        sonoff_valve->characteristics[5] = &set_duration;
+                        sonoff_valve->characteristics[6] = &remaining_duration;
+                    }
             }
     
             void charac_garagedoor(const uint8_t service) {
@@ -2132,6 +2916,61 @@ void create_accessory() {
                     sonoff_garage->characteristics[2] = &target_door_state;
                     sonoff_garage->characteristics[3] = &obstruction_detected;
                     sonoff_garage->characteristics[4] = &show_setup;
+            }
+    
+            void charac_covering(const uint8_t service, const uint8_t covering_type) {
+                homekit_service_t *sonoff_covering = sonoff->services[service] = calloc(1, sizeof(homekit_service_t));
+                
+                switch (covering_type) {
+                    case 1:
+                        sonoff_covering->id = 64;
+                        sonoff_covering->type = HOMEKIT_SERVICE_WINDOW;
+                        break;
+                        
+                    case 2:
+                        sonoff_covering->id = 70;
+                        sonoff_covering->type = HOMEKIT_SERVICE_DOOR;
+                        break;
+                        
+                    default:
+                        sonoff_covering->id = 58;
+                        sonoff_covering->type = HOMEKIT_SERVICE_WINDOW_COVERING;
+                        break;
+                }
+                
+                sonoff_covering->primary = true;
+                sonoff_covering->characteristics = calloc(6, sizeof(homekit_characteristic_t*));
+                    sonoff_covering->characteristics[0] = &covering_service_name;
+                    sonoff_covering->characteristics[1] = &covering_current_position;
+                    sonoff_covering->characteristics[2] = &covering_target_position;
+                    sonoff_covering->characteristics[3] = &covering_position_state;
+                    sonoff_covering->characteristics[4] = &show_setup;
+            }
+    
+            void charac_lock(const uint8_t service) {
+                homekit_service_t *sonoff_lock = sonoff->services[service] = calloc(1, sizeof(homekit_service_t));
+                sonoff_lock->id = 76;
+                sonoff_lock->type = HOMEKIT_SERVICE_LOCK_MECHANISM;
+                sonoff_lock->primary = true;
+                sonoff_lock->characteristics = calloc(5, sizeof(homekit_characteristic_t*));
+                    sonoff_lock->characteristics[0] = &lock_service_name;
+                    sonoff_lock->characteristics[1] = &lock_current_state;
+                    sonoff_lock->characteristics[2] = &lock_target_state;
+                    sonoff_lock->characteristics[3] = &show_setup;
+            }
+    
+            void charac_rgbw(const uint8_t service) {
+                homekit_service_t *sonoff_rgbw = sonoff->services[service] = calloc(1, sizeof(homekit_service_t));
+                sonoff_rgbw->id = 81;
+                sonoff_rgbw->type = HOMEKIT_SERVICE_LIGHTBULB;
+                sonoff_rgbw->primary = true;
+                sonoff_rgbw->characteristics = calloc(7, sizeof(homekit_characteristic_t*));
+                    sonoff_rgbw->characteristics[0] = &rgbw_service_name;
+                    sonoff_rgbw->characteristics[1] = &switch1_on;
+                    sonoff_rgbw->characteristics[2] = &brightness;
+                    sonoff_rgbw->characteristics[3] = &hue;
+                    sonoff_rgbw->characteristics[4] = &saturation;
+                    sonoff_rgbw->characteristics[5] = &show_setup;
             }
             // --------
     
@@ -2196,7 +3035,7 @@ void create_accessory() {
                 snprintf(device_type_name_value, 12, "Water Valve");
                 device_type_name.value = HOMEKIT_STRING(device_type_name_value);
                 
-                charac_valve(1);
+                charac_valve(1, custom_garagedoor_has_stop.value.bool_value);
                 
             } else if (device_type_static == 8) {
                 char *device_type_name_value = malloc(12);
@@ -2243,6 +3082,27 @@ void create_accessory() {
                 
                 service_number = 4;
                 
+            } else if (device_type_static == 12) {
+                char *device_type_name_value = malloc(9);
+                snprintf(device_type_name_value, 9, "Covering");
+                device_type_name.value = HOMEKIT_STRING(device_type_name_value);
+                
+                charac_covering(1, custom_covering_type.value.int_value);
+                
+            } else if (device_type_static == 13) {
+                char *device_type_name_value = malloc(5);
+                snprintf(device_type_name_value, 5, "Lock");
+                device_type_name.value = HOMEKIT_STRING(device_type_name_value);
+                
+                charac_lock(1);
+                
+            } else if (device_type_static == 14) {
+                char *device_type_name_value = malloc(5);
+                snprintf(device_type_name_value, 5, "RGBW");
+                device_type_name.value = HOMEKIT_STRING(device_type_name_value);
+                
+                charac_rgbw(1);
+                
             } else { // device_type_static == 1
                 char *device_type_name_value = malloc(11);
                 snprintf(device_type_name_value, 11, "Switch 1ch");
@@ -2253,7 +3113,7 @@ void create_accessory() {
 
             // Setup Accessory, visible only in 3party Apps
             if (show_setup.value.bool_value) {
-                printf("RC > Creating Setup accessory\n");
+                printf("RC > Creating Setup\n");
                 
                 homekit_service_t *sonoff_setup = sonoff->services[service_number] = calloc(1, sizeof(homekit_service_t));
                 sonoff_setup->id = 99;
@@ -2276,7 +3136,7 @@ void create_accessory() {
                         break;
                         
                     case 5:
-                        setting_count += 5;
+                        setting_count += 6;
                         break;
                         
                     case 6:
@@ -2284,7 +3144,7 @@ void create_accessory() {
                         break;
                         
                     case 7:
-                        setting_count += 1;
+                        setting_count += 2;
                         break;
                         
                     case 8:
@@ -2303,7 +3163,19 @@ void create_accessory() {
                         setting_count += 5;
                         break;
                         
-                    default:    // device_type_static == 1
+                    case 12:
+                        setting_count += 5;
+                        break;
+                        
+                    case 13:
+                        setting_count += 2;
+                        break;
+                        
+                    case 14:
+                        setting_count += 6;
+                        break;
+                        
+                    default:    // case 1:
                         setting_count += 2;
                         break;
                 }
@@ -2375,6 +3247,8 @@ void create_accessory() {
                         setting_number++;
                         sonoff_setup->characteristics[setting_number] = &temp_offset;
                         setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &temp_deadband;
+                        setting_number++;
                         sonoff_setup->characteristics[setting_number] = &custom_init_state_th;
                         setting_number++;
                         sonoff_setup->characteristics[setting_number] = &poll_period;
@@ -2392,6 +3266,8 @@ void create_accessory() {
                         
                     } else if (device_type_static == 7) {
                         sonoff_setup->characteristics[setting_number] = &custom_valve_type;
+                        setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &custom_garagedoor_has_stop;
                     
                     } else if (device_type_static == 8) {
                         sonoff_setup->characteristics[setting_number] = &custom_garagedoor_has_stop;
@@ -2406,7 +3282,7 @@ void create_accessory() {
                         setting_number++;
                         sonoff_setup->characteristics[setting_number] = &custom_garagedoor_control_with_button;
                         setting_number++;
-                        sonoff_setup->characteristics[setting_number] = &custom_garagedoor_button_time;
+                        sonoff_setup->characteristics[setting_number] = &custom_inching_time;
                         
                     } else if (device_type_static == 9) {
                         sonoff_setup->characteristics[setting_number] = &dht_sensor_type;
@@ -2433,11 +3309,41 @@ void create_accessory() {
                         setting_number++;
                         sonoff_setup->characteristics[setting_number] = &custom_reverse_sw3;
                         
+                    } else if (device_type_static == 12) {
+                        sonoff_setup->characteristics[setting_number] = &external_toggle1;
+                        setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &custom_reverse_sw2;
+                        setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &custom_covering_up_time;
+                        setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &custom_covering_down_time;
+                        setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &custom_covering_type;
+                        
+                    } else if (device_type_static == 13) {
+                        sonoff_setup->characteristics[setting_number] = &external_toggle1;
+                        setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &custom_inching_time;
+                        
+                    } else if (device_type_static == 14) {
+                        sonoff_setup->characteristics[setting_number] = &custom_init_state_sw1;
+                        setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &custom_r_gpio;
+                        setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &custom_g_gpio;
+                        setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &custom_b_gpio;
+                        setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &custom_w_gpio;
+                        setting_number++;
+                        sonoff_setup->characteristics[setting_number] = &custom_color_boost;
                     }
             }
     
     config.accessories = accessories;
     config.password = "021-82-017";
+    config.category = accessory_category;
+    config.config_number = CONFIG_NUMBER;
     
     printf("RC > Starting HomeKit Server\n");
     homekit_server_init(&config);
@@ -2467,7 +3373,10 @@ void old_settings_init() {
     
     status = sysparam_get_int8("board_type", &int8_value);
     if (status == SYSPARAM_OK) {
-        board_type.value.int_value = int8_value;
+        if (board_type.value.int_value != 3) {
+            board_type.value.int_value = int8_value;
+        }
+        
         status = sysparam_set_data("board_type", NULL, 0, false);
     }
     
@@ -2635,6 +3544,18 @@ void user_init(void) {
     if (status != SYSPARAM_OK) {
         settings_init();
     } else {
+        // For old Shelly device types (device type 12 and 13)
+        if (int8_value == 12) {
+            int8_value = 1;
+            board_type.value.int_value = 3;
+        }
+        
+        if (int8_value == 13) {
+            int8_value = 2;
+            board_type.value.int_value = 3;
+        }
+        // END - For old Shelly device types (device type 12 and 13)
+        
         device_type.value.int_value = int8_value;
         device_type_static = int8_value;
         status = sysparam_set_data("device_type", NULL, 0, false);

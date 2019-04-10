@@ -62,10 +62,14 @@ typedef enum {
     homekit_accessory_category_air_conditioner = 21,
     homekit_accessory_category_humidifier = 22,
     homekit_accessory_category_dehumidifier = 23,
+    homekit_accessory_category_apple_tv = 24,
     homekit_accessory_category_speaker = 26,
+    homekit_accessory_category_airport = 27,
     homekit_accessory_category_sprinkler = 28,
     homekit_accessory_category_faucet = 29,
     homekit_accessory_category_shower_head = 30,
+    homekit_accessory_category_television = 31,
+    homekit_accessory_category_target_controller = 32,
 } homekit_accessory_category_t;
 
 struct _homekit_accessory;
@@ -195,8 +199,12 @@ struct _homekit_characteristic {
 
     homekit_value_t (*getter)();
     void (*setter)(const homekit_value_t);
-
     homekit_characteristic_change_callback_t *callback;
+
+    homekit_value_t (*getter_ex)(const homekit_characteristic_t *ch);
+    void (*setter_ex)(homekit_characteristic_t *ch, const homekit_value_t value);
+
+    void *context;
 };
 
 struct _homekit_service {
@@ -206,7 +214,8 @@ struct _homekit_service {
     const char *type;
     bool hidden;
     bool primary;
-    // linked
+    
+    homekit_service_t **linked;
     homekit_characteristic_t **characteristics;
 };
 
@@ -228,6 +237,9 @@ struct _homekit_accessory {
 
 #define HOMEKIT_SERVICE(_type, ...) \
     &(homekit_service_t) { .type=HOMEKIT_SERVICE_ ## _type, ##__VA_ARGS__ }
+
+#define HOMEKIT_SERVICE_(_type, ...) \
+    { .type=HOMEKIT_SERVICE_ ## _type, ##__VA_ARGS__ }
 
 #define HOMEKIT_CHARACTERISTIC(name, ...) \
     &(homekit_characteristic_t) { \
