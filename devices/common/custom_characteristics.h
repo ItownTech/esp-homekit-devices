@@ -54,11 +54,11 @@
     | homekit_permissions_paired_write \
     | homekit_permissions_notify, \
     .min_value = (float[]) {1}, \
-    .max_value = (float[]) {4}, \
+    .max_value = (float[]) {5}, \
     .min_step = (float[]) {1}, \
     .valid_values = { \
-    .count = 4, \
-    .values = (uint8_t[]) {1, 2, 3, 4}, \
+    .count = 5, \
+    .values = (uint8_t[]) {1, 2, 3, 4, 5}, \
     }, \
     .value = HOMEKIT_UINT8_(_value), \
     ##__VA_ARGS__
@@ -100,6 +100,7 @@
  12. Window
  13. Lock
  14. MagicHome
+ 15. Stateless Switch
  */
 #define HOMEKIT_CHARACTERISTIC_CUSTOM_DEVICE_TYPE HOMEKIT_CUSTOM_UUID("F0000100")
 #define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_DEVICE_TYPE(_value, ...) \
@@ -110,11 +111,11 @@
     | homekit_permissions_paired_write \
     | homekit_permissions_notify, \
     .min_value = (float[]) {1}, \
-    .max_value = (float[]) {14}, \
+    .max_value = (float[]) {15}, \
     .min_step = (float[]) {1}, \
     .valid_values = { \
-    .count = 14, \
-    .values = (uint8_t[]) {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, \
+    .count = 15, \
+    .values = (uint8_t[]) {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, \
     }, \
     .value = HOMEKIT_UINT8_(_value), \
     ##__VA_ARGS__
@@ -137,11 +138,11 @@
     | homekit_permissions_paired_write \
     | homekit_permissions_notify, \
     .min_value = (float[]) {0}, \
-    .max_value = (float[]) {2}, \
+    .max_value = (float[]) {3}, \
     .min_step = (float[]) {1}, \
     .valid_values = { \
-    .count = 3, \
-    .values = (uint8_t[]) {0, 1, 2}, \
+    .count = 4, \
+    .values = (uint8_t[]) {0, 1, 2, 3}, \
     }, \
     .value = HOMEKIT_UINT8_(_value), \
     ##__VA_ARGS__
@@ -155,11 +156,11 @@
     | homekit_permissions_paired_write \
     | homekit_permissions_notify, \
     .min_value = (float[]) {0}, \
-    .max_value = (float[]) {2}, \
+    .max_value = (float[]) {3}, \
     .min_step = (float[]) {1}, \
     .valid_values = { \
-    .count = 3, \
-    .values = (uint8_t[]) {0, 1, 2}, \
+    .count = 4, \
+    .values = (uint8_t[]) {0, 1, 2, 3}, \
     }, \
     .value = HOMEKIT_UINT8_(_value), \
     ##__VA_ARGS__
@@ -273,17 +274,77 @@
     .value = HOMEKIT_UINT8_(_value), \
     ##__VA_ARGS__
 
-#define HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME HOMEKIT_CUSTOM_UUID("F0000113")
-#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_INCHING_TIME(_value, ...) \
-    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME, \
-    .description = "Inching time", \
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME1 HOMEKIT_CUSTOM_UUID("F0000113")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_INCHING_TIME1(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME1, \
+    .description = "Inching time 1", \
     .format = homekit_format_float, \
     .unit = homekit_unit_seconds, \
     .permissions = homekit_permissions_paired_read \
     | homekit_permissions_paired_write \
     | homekit_permissions_notify, \
     .min_value = (float[]) {0}, \
-    .max_value = (float[]) {5.1}, \
+    .max_value = (float[]) {12}, \
+    .min_step = (float[]) {0.3}, \
+    .value = HOMEKIT_FLOAT_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME2 HOMEKIT_CUSTOM_UUID("F0001113")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_INCHING_TIME2(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME2, \
+    .description = "Inching time 2", \
+    .format = homekit_format_float, \
+    .unit = homekit_unit_seconds, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {0}, \
+    .max_value = (float[]) {12}, \
+    .min_step = (float[]) {0.3}, \
+    .value = HOMEKIT_FLOAT_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME3 HOMEKIT_CUSTOM_UUID("F0002113")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_INCHING_TIME3(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME3, \
+    .description = "Inching time 3", \
+    .format = homekit_format_float, \
+    .unit = homekit_unit_seconds, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {0}, \
+    .max_value = (float[]) {12}, \
+    .min_step = (float[]) {0.3}, \
+    .value = HOMEKIT_FLOAT_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME4 HOMEKIT_CUSTOM_UUID("F0003113")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_INCHING_TIME4(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIME4, \
+    .description = "Inching time 4", \
+    .format = homekit_format_float, \
+    .unit = homekit_unit_seconds, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {0}, \
+    .max_value = (float[]) {12}, \
+    .min_step = (float[]) {0.3}, \
+    .value = HOMEKIT_FLOAT_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIMEDM HOMEKIT_CUSTOM_UUID("F0004113")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_INCHING_TIMEDM(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_INCHING_TIMEDM, \
+    .description = "Inching time DM", \
+    .format = homekit_format_float, \
+    .unit = homekit_unit_seconds, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {0}, \
+    .max_value = (float[]) {12}, \
     .min_step = (float[]) {0.3}, \
     .value = HOMEKIT_FLOAT_(_value), \
     ##__VA_ARGS__
@@ -530,17 +591,25 @@
     .type = HOMEKIT_CHARACTERISTIC_CUSTOM_COLOR_BOOST, \
     .description = "Color Boost", \
     .format = homekit_format_uint8, \
+    .unit = homekit_unit_percentage, \
     .permissions = homekit_permissions_paired_read \
     | homekit_permissions_paired_write \
     | homekit_permissions_notify, \
-    .min_value = (float[]) {1}, \
-    .max_value = (float[]) {3}, \
+    .min_value = (float[]) {0}, \
+    .max_value = (float[]) {100}, \
     .min_step = (float[]) {1}, \
-    .valid_values = { \
-    .count = 3, \
-    .values = (uint8_t[]) {1, 2, 3}, \
-    }, \
     .value = HOMEKIT_UINT8_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_SWITCH_DM HOMEKIT_CUSTOM_UUID("F0000150")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_SWITCH_DM(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_SWITCH_DM, \
+    .description = "Dummy Switch", \
+    .format = homekit_format_bool, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .value = HOMEKIT_BOOL_(_value), \
     ##__VA_ARGS__
 
 /* Switch Initial State
@@ -607,6 +676,24 @@
 #define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_INIT_STATE_SW4(_value, ...) \
     .type = HOMEKIT_CHARACTERISTIC_CUSTOM_INIT_STATE_SW4, \
     .description = "Init State SW4", \
+    .format = homekit_format_uint8, \
+    .permissions = homekit_permissions_paired_read \
+    | homekit_permissions_paired_write \
+    | homekit_permissions_notify, \
+    .min_value = (float[]) {0}, \
+    .max_value = (float[]) {3}, \
+    .min_step = (float[]) {1}, \
+    .valid_values = { \
+    .count = 4, \
+    .values = (uint8_t[]) {0, 1, 2, 3}, \
+    }, \
+    .value = HOMEKIT_UINT8_(_value), \
+    ##__VA_ARGS__
+
+#define HOMEKIT_CHARACTERISTIC_CUSTOM_INIT_STATE_SWDM HOMEKIT_CUSTOM_UUID("F0000505")
+#define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_INIT_STATE_SWDM(_value, ...) \
+    .type = HOMEKIT_CHARACTERISTIC_CUSTOM_INIT_STATE_SWDM, \
+    .description = "Init State DM", \
     .format = homekit_format_uint8, \
     .permissions = homekit_permissions_paired_read \
     | homekit_permissions_paired_write \
